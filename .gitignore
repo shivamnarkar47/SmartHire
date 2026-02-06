@@ -1,0 +1,7 @@
+mock-interview-platform/backend/node_modules/*
+mock-interview-platform/frontend/node_modules/*
+mock-interview-platform/.*/*
+
+*.log
+nul
+**/.env
