@@ -12,6 +12,7 @@ An AI-powered mock interview platform built with React, Node.js, Express, and Go
 
 ## Tech Stack
 
+
 ### Frontend
 - React 18
 - React Router v6
