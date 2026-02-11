@@ -1,17 +1,18 @@
 const https = require('https');
-const http = require('http');
 require('dotenv').config();
 
 class AIService {
   constructor() {
-    this.geminiApiKey = process.env.GEMINI_API_KEY || "AIzaSyAxaWuMFpVNHchxjz48cxI_i8-nR7Lv6n8";
+    this.geminiApiKey = process.env.GEMINI_API_KEY;
     this.geminiModel = process.env.GEMINI_MODEL || 'gemini-2.5-flash-lite';
-    this.opencodeEndpoint = process.env.OPENCODE_ENDPOINT || 'http://localhost:4096';
-    this.opencodeSessionId = process.env.OPENCODE_SESSION_ID || 'ses_3ce183adfffeT9GY9TKf3vhKMH';
-    this.useOpencodePrimary = process.env.USE_OPENCODE_PRIMARY === 'true';
+    this.groqApiKey = process.env.GROQ_API_KEY;
+    this.groqModel = process.env.GROQ_MODEL || 'llama-3.3-70b-versatile';
   }
 
   async makeGeminiRequest(prompt, maxTokens = 300) {
+    if (!this.geminiApiKey) {
+      return { error: 'GEMINI_API_KEY not configured', provider: 'gemini' };
+    }
     return new Promise((resolve) => {
       const postData = JSON.stringify({
         contents: [{ parts: [{ text: prompt }] }],
@@ -66,52 +67,59 @@ class AIService {
     });
   }
 
-  async makeOpencodeRequest(prompt, maxTokens = 300) {
+  async makeGroqRequest(prompt, maxTokens = 300) {
     return new Promise((resolve) => {
+      if (!this.groqApiKey || this.groqApiKey === 'your-groq-api-key-here') {
+        resolve({ error: 'GROQ_API_KEY not configured', provider: 'groq' });
+        return;
+      }
+
       const postData = JSON.stringify({
-        parts: [{ type: "text", text: prompt }]
+        model: this.groqModel,
+        messages: [{ role: "user", content: prompt }],
+        max_tokens: maxTokens,
+        temperature: 0.7
       });
 
-      const url = new URL(`${this.opencodeEndpoint}/session/${this.opencodeSessionId}/message`);
       const options = {
-        hostname: url.hostname,
-        port: url.port || 80,
-        path: url.pathname,
+        hostname: 'api.groq.com',
+        path: '/openai/v1/chat/completions',
         method: 'POST',
         headers: {
+          'Authorization': `Bearer ${this.groqApiKey}`,
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(postData)
         }
       };
 
-      console.log('AI Service: Making request to Opencode...');
-      const req = http.request(options, (res) => {
+      console.log('AI Service: Making request to Groq...');
+      const req = https.request(options, (res) => {
         let data = '';
         res.on('data', (chunk) => data += chunk);
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            console.log('AI Service: Opencode error:', res.statusCode);
-            resolve({ error: `Opencode API returned status ${res.statusCode}`, provider: 'opencode' });
+            console.log('AI Service: Groq error:', res.statusCode, data);
+            resolve({ error: `Groq API returned status ${res.statusCode}`, provider: 'groq' });
             return;
           }
           try {
             const result = JSON.parse(data);
             if (result.error) {
-              console.log('AI Service: Opencode API error:', result.error);
-              resolve({ error: result.error.message || result.error, provider: 'opencode' });
+              console.log('AI Service: Groq API error:', result.error);
+              resolve({ error: result.error.message || result.error, provider: 'groq' });
             } else {
-              const text = result.parts?.[0]?.text || '';
-              resolve({ text, provider: 'opencode' });
+              const text = result.choices?.[0]?.message?.content || '';
+              resolve({ text, provider: 'groq' });
             }
           } catch (e) {
-            resolve({ error: e.message, provider: 'opencode' });
+            resolve({ error: e.message, provider: 'groq' });
           }
         });
       });
 
       req.on('error', (e) => {
-        console.log('AI Service: Opencode request error:', e.message);
-        resolve({ error: e.message, provider: 'opencode' });
+        console.log('AI Service: Groq request error:', e.message);
+        resolve({ error: e.message, provider: 'groq' });
       });
       req.write(postData);
       req.end();
@@ -119,46 +127,54 @@ class AIService {
   }
 
   async makeRequest(prompt, maxTokens = 300) {
-    if (this.useOpencodePrimary) {
-      const opencodeResult = await this.makeOpencodeRequest(prompt, maxTokens);
-      if (!opencodeResult.error) {
-        console.log('AI Service: Opencode succeeded');
-        return opencodeResult;
-      }
-      console.log('AI Service: Opencode failed, trying Gemini...');
-      return await this.makeGeminiRequest(prompt, maxTokens);
-    } else {
-      const geminiResult = await this.makeGeminiRequest(prompt, maxTokens);
-      if (!geminiResult.error) {
-        console.log('AI Service: Gemini succeeded');
-        return geminiResult;
-      }
-      console.log('AI Service: Gemini failed, trying Opencode...');
-      return await this.makeOpencodeRequest(prompt, maxTokens);
+    // Try Gemini first
+    const geminiResult = await this.makeGeminiRequest(prompt, maxTokens);
+    if (!geminiResult.error) {
+      console.log('AI Service: Gemini succeeded');
+      return geminiResult;
     }
+    console.log('AI Service: Gemini failed, trying Groq...');
+    
+    // Fall back to Groq
+    const groqResult = await this.makeGroqRequest(prompt, maxTokens);
+    if (!groqResult.error) {
+      console.log('AI Service: Groq succeeded');
+      return groqResult;
+    }
+    console.log('AI Service: Groq failed, returning error');
+    
+    return groqResult;
   }
 
-  async generateInterviewQuestion(type, domain, difficulty, previousQuestions = []) {
-    const prompt = `Generate exactly ONE ${difficulty} level ${type} interview question for ${domain}.
+  async generateInterviewQuestions(type, domain, difficulty, previousQuestions = [], count = 3) {
+    const prompt = `Generate exactly ${count} ${difficulty} level ${type} interview questions for ${domain}.
     ${previousQuestions.length > 0 ? `Avoid these topics: ${previousQuestions.join(', ')}` : ''}
 
-    JSON format only:
-    {"question": "your question", "category": "category name", "expectedPoints": ["point 1", "point 2"], "timeLimit": 300}`;
+    Return a JSON array with exactly ${count} questions in this format:
+    [
+      {"question": "question text", "category": "category name", "expectedPoints": ["point 1", "point 2"], "timeLimit": 300},
+      ...
+    ]`;
 
-    const result = await this.makeRequest(prompt, 200);
+    const result = await this.makeRequest(prompt, 400);
 
     if (result.error) {
       console.error('AI Error:', result.error, 'Provider:', result.provider);
-      return this.getFallbackQuestion(domain);
+      return this.getFallbackQuestions(domain, count);
     }
 
     const parsed = this.parseJSON(result.text);
-    if (!parsed || !parsed.question) {
+    if (!parsed || !Array.isArray(parsed) || parsed.length === 0) {
       console.error('AI returned invalid data:', result.text);
-      return this.getFallbackQuestion(domain);
+      return this.getFallbackQuestions(domain, count);
     }
 
-    return parsed;
+    return parsed.slice(0, count);
+  }
+
+  async generateInterviewQuestion(type, domain, difficulty, previousQuestions = []) {
+    const questions = await this.generateInterviewQuestions(type, domain, difficulty, previousQuestions, 1);
+    return questions[0] || this.getFallbackQuestions(domain, 1)[0];
   }
 
   async evaluateAnswer(question, answer, type, domain) {
@@ -214,7 +230,7 @@ JSON format:
     }
   }
 
-  getFallbackQuestion(domain) {
+  getFallbackQuestions(domain, count = 3) {
     const fallbackQuestions = [
       {
         question: `Describe a challenging project you worked on in ${domain} and how you overcame obstacles.`,
@@ -252,7 +268,14 @@ JSON format:
         timeLimit: 300
       }
     ];
-    return fallbackQuestions[Math.floor(Math.random() * fallbackQuestions.length)];
+    
+    // Return requested number of questions, shuffled
+    const shuffled = [...fallbackQuestions].sort(() => Math.random() - 0.5);
+    return shuffled.slice(0, count);
+  }
+
+  getFallbackQuestion(domain) {
+    return this.getFallbackQuestions(domain, 1)[0];
   }
 
   getFallbackFeedback() {

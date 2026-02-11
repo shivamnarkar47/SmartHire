@@ -294,8 +294,11 @@ router.post('/:interviewId/complete', authMiddleware, async (req, res) => {
 
     await feedbackDoc.save();
 
-    // Update progress
-    await updateUserProgress(req.user.userId, interview);
+    await feedbackDoc.save();
+
+    updateUserProgress(req.user.userId, interview).catch(err => {
+      console.error('Progress update failed:', err.message);
+    });
 
     res.json({
       message: 'Interview completed',
@@ -346,66 +349,72 @@ router.get('/:interviewId', authMiddleware, async (req, res) => {
 });
 
 async function updateUserProgress(userId, interview) {
-  const newHistoryEntry = {
-    interviewId: interview._id,
-    type: interview.type,
-    domain: interview.domain,
-    score: interview.overallScore,
-    date: interview.completedAt
-  };
+  try {
+    const newHistoryEntry = {
+      interviewId: interview._id,
+      type: interview.type,
+      domain: interview.domain,
+      score: interview.overallScore,
+      date: interview.completedAt
+    };
 
-  const newActivityEntry = {
-    action: `Completed ${interview.type} interview`,
-    date: new Date(),
-    details: `Score: ${interview.overallScore}/100`
-  };
+    const newActivityEntry = {
+      action: `Completed ${interview.type} interview`,
+      date: new Date(),
+      details: `Score: ${interview.overallScore}/100`
+    };
 
-  const progress = await Progress.findOne({ userId });
+    const progress = await Progress.findOne({ userId });
+    const skillProgress = progress?.skillProgress || {};
 
-  if (!progress) {
-    const newProgress = new Progress({
-      userId,
-      totalInterviews: 1,
-      completedInterviews: 1,
-      averageScore: interview.overallScore,
-      interviewHistory: [newHistoryEntry],
-      skillProgress: {
-        [interview.type]: { total: 1, score: interview.overallScore }
-      },
-      recentActivity: [newActivityEntry],
-      lastUpdated: new Date()
-    });
-    await newProgress.save();
-    return;
-  }
-
-  const newTotal = progress.totalInterviews + 1;
-  const newAverageScore = Math.round(((progress.averageScore * progress.totalInterviews) + interview.overallScore) / newTotal);
-
-  const skillTotal = (progress.skillProgress[interview.type]?.total || 0) + 1;
-  const skillScore = Math.round(((progress.skillProgress[interview.type]?.score || 0) * (skillTotal - 1) + interview.overallScore) / skillTotal);
-
-  const updateDoc = {
-    $inc: {
-      totalInterviews: 1,
-      completedInterviews: 1
-    },
-    $set: {
-      averageScore: newAverageScore,
-      [`skillProgress.${interview.type}`]: { total: skillTotal, score: skillScore },
-      lastUpdated: new Date()
-    },
-    $push: {
-      interviewHistory: newHistoryEntry,
-      recentActivity: { $each: [newActivityEntry], $slice: -10 }
+    if (!progress) {
+      const newProgress = new Progress({
+        userId,
+        totalInterviews: 1,
+        completedInterviews: 1,
+        averageScore: interview.overallScore,
+        interviewHistory: [newHistoryEntry],
+        skillProgress: {
+          [interview.type]: { total: 1, score: interview.overallScore }
+        },
+        recentActivity: [newActivityEntry],
+        lastUpdated: new Date()
+      });
+      await newProgress.save();
+      return;
     }
-  };
 
-  await Progress.findOneAndUpdate(
-    { userId },
-    updateDoc,
-    { upsert: true, new: true }
-  );
+    const newTotal = progress.totalInterviews + 1;
+    const newAverageScore = Math.round(((progress.averageScore * progress.totalInterviews) + interview.overallScore) / newTotal);
+
+    const currentSkill = skillProgress[interview.type] || { total: 0, score: 0 };
+    const skillTotal = (currentSkill.total || 0) + 1;
+    const skillScore = Math.round(((currentSkill.score || 0) * (skillTotal - 1) + interview.overallScore) / skillTotal);
+
+    const updateDoc = {
+      $inc: {
+        totalInterviews: 1,
+        completedInterviews: 1
+      },
+      $set: {
+        averageScore: newAverageScore,
+        [`skillProgress.${interview.type}`]: { total: skillTotal, score: skillScore },
+        lastUpdated: new Date()
+      },
+      $push: {
+        interviewHistory: newHistoryEntry,
+        recentActivity: { $each: [newActivityEntry], $slice: -10 }
+      }
+    };
+
+    await Progress.findOneAndUpdate(
+      { userId },
+      updateDoc,
+      { upsert: true, new: true }
+    );
+  } catch (error) {
+    console.error('Progress update error:', error.message);
+  }
 }
 
 module.exports = router;

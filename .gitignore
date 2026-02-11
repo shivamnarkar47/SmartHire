@@ -5,3 +5,5 @@ mock-interview-platform/.*/*
 *.log
 nul
 **/.env
+mock-interview-platform/frontend/build/*
+**/pnpm-lock.yaml

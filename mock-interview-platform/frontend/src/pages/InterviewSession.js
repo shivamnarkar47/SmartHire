@@ -31,6 +31,8 @@ const InterviewSession = () => {
     return interview?.questions?.length || 5;
   }, [interview]);
 
+  const MAX_QUESTIONS = 5; // Hard limit for interview questions
+
   const initializeInterview = useCallback(async () => {
     try {
       setError(null);
@@ -103,6 +105,12 @@ const InterviewSession = () => {
     if (!interview?.questions) return false;
 
     const nextIndex = currentIndexRef.current + 1;
+
+    // Check if we've reached the maximum number of questions
+    if (nextIndex >= MAX_QUESTIONS) {
+      console.log(`Reached maximum of ${MAX_QUESTIONS} questions. Interview complete.`);
+      return false; // Signal that no more questions - complete the interview
+    }
 
     if (nextIndex < interview.questions.length) {
       setIsTransitioning(true);
@@ -216,12 +224,37 @@ const InterviewSession = () => {
         setFeedback(response.data.feedback);
       }
 
+      // Check if we've reached the maximum questions before fetching next
+      if (currentIndexRef.current >= MAX_QUESTIONS - 1) {
+        try {
+          await interviewService.completeInterview(interviewId);
+          setTimeout(() => {
+            navigate(`/interview/feedback/${interviewId}`);
+          }, 500);
+        } catch (err) {
+          console.error('Failed to complete interview:', err);
+          setTimeout(() => {
+            navigate(`/interview/feedback/${interviewId}`);
+          }, 500);
+        }
+        setSubmitting(false);
+        return;
+      }
+      
       const hasMore = await fetchNextQuestion();
       
       if (!hasMore) {
-        setTimeout(() => {
-          navigate(`/interview/feedback/${interviewId}`);
-        }, 1500);
+        try {
+          await interviewService.completeInterview(interviewId);
+          setTimeout(() => {
+            navigate(`/interview/feedback/${interviewId}`);
+          }, 500);
+        } catch (err) {
+          console.error('Failed to complete interview:', err);
+          setTimeout(() => {
+            navigate(`/interview/feedback/${interviewId}`);
+          }, 500);
+        }
       }
     } catch (err) {
       console.error('Failed to submit answer:', err);
@@ -232,9 +265,12 @@ const InterviewSession = () => {
   };
 
   const handleAutoSubmit = useCallback(() => {
-    if (!submitting) {
+    if (submitting) return;
+    if (currentIndexRef.current >= MAX_QUESTIONS - 1) {
       handleSubmitAnswer(true);
+      return;
     }
+    handleSubmitAnswer(true);
   }, [answer, audioChunks, submitting]);
 
   const handleStartRecording = async () => {
@@ -304,8 +340,8 @@ const InterviewSession = () => {
   };
 
   const progress = getQuestionsCount();
-  const progressPercent = ((currentQuestionIndex + 1) / progress) * 100;
-  const isLastQuestion = currentQuestionIndex >= progress - 1;
+  const progressPercent = ((currentQuestionIndex + 1) / MAX_QUESTIONS) * 100;
+  const isLastQuestion = currentQuestionIndex >= MAX_QUESTIONS - 1;
 
   if (loading) {
     return (
@@ -334,7 +370,7 @@ const InterviewSession = () => {
       <div style={styles.progressHeader}>
         <div style={styles.progressContainer}>
           <div style={styles.progressLabels}>
-            <span style={styles.progressLabel}>Question {currentQuestionIndex + 1} of {progress}</span>
+            <span style={styles.progressLabel}>Question {currentQuestionIndex + 1} of {MAX_QUESTIONS}</span>
             <span style={styles.progressPercent}>{Math.round(progressPercent)}%</span>
           </div>
           <div style={styles.progressBar}>

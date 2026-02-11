@@ -1,28 +1,35 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { interviewService, feedbackService } from '../services/interviewService';
 
 const InterviewFeedback = () => {
   const { interviewId } = useParams();
+  const navigate = useNavigate();
+  
   const [interview, setInterview] = useState(null);
   const [feedback, setFeedback] = useState(null);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('overview');
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     fetchData();
   }, [interviewId]);
 
   const fetchData = async () => {
+    setLoading(true);
     try {
-      const [interviewRes, feedbackRes] = await Promise.all([
-        interviewService.getInterview(interviewId),
-        feedbackService.getInterviewFeedback(interviewId)
-      ]);
+      const interviewRes = await interviewService.getInterview(interviewId);
       setInterview(interviewRes.data);
+      
+      if (interviewRes.data.status !== 'completed') {
+        throw new Error('Interview not completed yet. Please finish the interview first.');
+      }
+      
+      const feedbackRes = await feedbackService.getInterviewFeedback(interviewId);
       setFeedback(feedbackRes.data);
     } catch (error) {
-      console.error('Failed to fetch feedback:', error);
+      setError(error.response?.data?.message || error.message || 'Failed to load interview data');
     } finally {
       setLoading(false);
     }
@@ -30,6 +37,28 @@ const InterviewFeedback = () => {
 
   if (loading) {
     return <div style={styles.loading}>Loading feedback...</div>;
+  }
+
+  if (error) {
+    return (
+      <div style={styles.errorContainer}>
+        <div style={styles.errorIcon}>⚠</div>
+        <h2 style={styles.errorTitle}>Unable to load feedback</h2>
+        <p style={styles.errorText}>{error}</p>
+        <button 
+          style={styles.retryButton} 
+          onClick={() => {
+            if (error.includes('not completed')) {
+              navigate('/dashboard');
+            } else {
+              navigate('/interview/setup');
+            }
+          }}
+        >
+          {error.includes('not completed') ? 'Back to Dashboard' : 'Start New Interview'}
+        </button>
+      </div>
+    );
   }
 
   if (!interview || !feedback) {
@@ -203,6 +232,40 @@ const styles = {
     height: '50vh',
     fontSize: '1.2rem',
     color: '#666'
+  },
+  errorContainer: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    height: '50vh',
+    padding: '2rem',
+    textAlign: 'center'
+  },
+  errorIcon: {
+    fontSize: '3rem',
+    marginBottom: '1rem'
+  },
+  errorTitle: {
+    fontSize: '1.5rem',
+    fontWeight: '600',
+    color: '#0f172a',
+    marginBottom: '0.5rem'
+  },
+  errorText: {
+    color: '#64748b',
+    marginBottom: '1.5rem',
+    maxWidth: '400px'
+  },
+  retryButton: {
+    padding: '0.75rem 1.5rem',
+    background: '#0f172a',
+    color: 'white',
+    border: 'none',
+    borderRadius: '8px',
+    fontSize: '0.95rem',
+    fontWeight: '500',
+    cursor: 'pointer'
   },
   error: {
     textAlign: 'center',
